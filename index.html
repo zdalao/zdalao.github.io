@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>zdalao · 俄罗斯方块</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    min-height: 100vh; display: flex; flex-direction: column; align-items: center;
+    background: #0d1117; color: #e6edf3; font-family: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    padding: 24px 16px 32px;
+  }
+  header { text-align: center; margin-bottom: 14px; }
+  h1 { font-size: 28px; letter-spacing: 2px; }
+  h1 span { color: #3fb950; }
+  p.sub { color: #8b949e; font-size: 14px; margin-top: 6px; }
+  .game { display: flex; gap: 14px; align-items: flex-start; }
+  .wrap { position: relative; }
+  canvas#board {
+    display: block; background: #161b22; border: 2px solid #30363d; border-radius: 10px;
+    width: min(62vw, 270px); height: auto; touch-action: none;
+  }
+  .side { display: flex; flex-direction: column; gap: 12px; width: 104px; }
+  .card { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 10px; }
+  .card h3 { font-size: 12px; color: #8b949e; font-weight: 600; margin-bottom: 6px; }
+  .card b { font-size: 20px; color: #3fb950; }
+  .card .small b { font-size: 16px; color: #d29922; }
+  canvas#next { display: block; width: 100%; background: #0d1117; border-radius: 6px; }
+  .overlay {
+    position: absolute; inset: 0; display: flex; flex-direction: column; gap: 12px;
+    align-items: center; justify-content: center; text-align: center;
+    background: rgba(13, 17, 23, .85); border-radius: 10px; padding: 16px;
+  }
+  .overlay.hidden { display: none; }
+  .overlay h2 { font-size: 22px; }
+  .overlay p { color: #8b949e; font-size: 13px; line-height: 1.7; }
+  button {
+    background: #238636; color: #fff; border: 0; border-radius: 8px;
+    padding: 10px 20px; font-size: 15px; cursor: pointer;
+  }
+  button:hover { background: #2ea043; }
+  button.ghost { background: #21262d; color: #e6edf3; border: 1px solid #30363d; }
+  .row { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; justify-content: center; }
+  .pad { display: grid; grid-template-columns: repeat(4, 56px); gap: 6px; margin-top: 16px; }
+  .pad button { padding: 10px 0; font-size: 16px; background: #21262d; border: 1px solid #30363d; }
+  .pad button:active { background: #30363d; }
+  footer { margin-top: 20px; color: #6e7681; font-size: 13px; text-align: center; line-height: 1.8; }
+</style>
+</head>
+<body>
+<header>
+  <h1>zdalao <span>· 俄罗斯方块</span></h1>
+  <p class="sub">← → 移动 · ↑ / X 旋转 · ↓ 加速 · 空格硬降 · P 暂停</p>
+</header>
+
+<div class="game">
+  <div class="wrap">
+    <canvas id="board" width="300" height="600"></canvas>
+    <div class="overlay" id="overlay">
+      <h2 id="ovTitle">开始游戏</h2>
+      <p id="ovText">消一行 100 分，消四行 800 分。<br>每消 10 行升一级，速度更快。</p>
+      <button id="startBtn">开始</button>
+    </div>
+  </div>
+  <div class="side">
+    <div class="card"><h3>得分</h3><b id="score">0</b></div>
+    <div class="card small"><h3>最高</h3><b id="best">0</b></div>
+    <div class="card small"><h3>行数 / 级别</h3><b id="lines">0 / 1</b></div>
+    <div class="card"><h3>下一个</h3><canvas id="next" width="84" height="84"></canvas></div>
+  </div>
+</div>
+
+<div class="row">
+  <button class="ghost" id="pauseBtn">暂停</button>
+  <button class="ghost" id="restartBtn">重开</button>
+</div>
+
+<div class="pad">
+  <button data-act="left">←</button>
+  <button data-act="rotate">⟳</button>
+  <button data-act="right">→</button>
+  <button data-act="drop">⤓</button>
+  <button data-act="down" style="grid-column: 2 / 4;">↓ 加速</button>
+</div>
+
+<footer>
+  zdalao.loc.cc · 一个单文件小游戏，无登录、无统计、不收集任何信息<br>
+  <span id="clock"></span>
+</footer>
+
+<script>
+(function () {
+  var COLS = 10, ROWS = 20, CELL = 30;
+  var board = document.getElementById('board');
+  var ctx = board.getContext('2d');
+  var nextCv = document.getElementById('next');
+  var nctx = nextCv.getContext('2d');
+  var scoreEl = document.getElementById('score');
+  var bestEl = document.getElementById('best');
+  var linesEl = document.getElementById('lines');
+  var overlay = document.getElementById('overlay');
+  var ovTitle = document.getElementById('ovTitle');
+  var ovText = document.getElementById('ovText');
+  var startBtn = document.getElementById('startBtn');
+  var pauseBtn = document.getElementById('pauseBtn');
+  var restartBtn = document.getElementById('restartBtn');
+
+  var SHAPES = {
+    I: { c: '#58a6ff', m: [[0,0,0,0],[1,1,1,1],[0,0,0,0],[0,0,0,0]] },
+    O: { c: '#d29922', m: [[1,1],[1,1]] },
+    T: { c: '#bc8cff', m: [[0,1,0],[1,1,1],[0,0,0]] },
+    S: { c: '#3fb950', m: [[0,1,1],[1,1,0],[0,0,0]] },
+    Z: { c: '#f85149', m: [[1,1,0],[0,1,1],[0,0,0]] },
+    J: { c: '#79c0ff', m: [[1,0,0],[1,1,1],[0,0,0]] },
+    L: { c: '#ffa657', m: [[0,0,1],[1,1,1],[0,0,0]] }
+  };
+  var KEYS = Object.keys(SHAPES);
+  var SCORES = [0, 100, 300, 500, 800];
+
+  var grid, bag, cur, next, score, lines, level, best, timer, speed, running, paused;
+
+  try { best = parseInt(localStorage.getItem('zdalao-tetris-best') || '0', 10) || 0; }
+  catch (e) { best = 0; }
+  bestEl.textContent = best;
+
+  function emptyGrid() {
+    var g = [];
+    for (var y = 0; y < ROWS; y++) { g.push(new Array(COLS).fill(null)); }
+    return g;
+  }
+  function shuffle(a) {
+    for (var i = a.length - 1; i > 0; i--) {
+      var j = Math.floor(Math.random() * (i + 1));
+      var t = a[i]; a[i] = a[j]; a[j] = t;
+    }
+    return a;
+  }
+  function drawBag() { if (!bag || bag.length === 0) bag = shuffle(KEYS.slice()); return bag.pop(); }
+  function spawn(type) {
+    var s = SHAPES[type];
+    return { type: type, color: s.c, m: s.m.map(function (r) { return r.slice(); }),
+             x: Math.floor((COLS - s.m[0].length) / 2), y: type === 'I' ? -1 : 0 };
+  }
+  function collide(m, x, y) {
+    for (var r = 0; r < m.length; r++) for (var c = 0; c < m[r].length; c++) {
+      if (!m[r][c]) continue;
+      var gx = x + c, gy = y + r;
+      if (gx < 0 || gx >= COLS || gy >= ROWS) return true;
+      if (gy >= 0 && grid[gy][gx]) return true;
+    }
+    return false;
+  }
+  function rotate(m) {
+    var n = m.length, out = [];
+    for (var c = 0; c < n; c++) {
+      var row = [];
+      for (var r = n - 1; r >= 0; r--) row.push(m[r][c]);
+      out.push(row);
+    }
+    return out;
+  }
+  function doRotate() {
+    if (!cur) return;
+    var rm = rotate(cur.m);
+    var kicks = [0, -1, 1, -2, 2];
+    for (var i = 0; i < kicks.length; i++) {
+      if (!collide(rm, cur.x + kicks[i], cur.y)) { cur.m = rm; cur.x += kicks[i]; draw(); return; }
+    }
+  }
+  function move(dx) {
+    if (!cur) return;
+    if (!collide(cur.m, cur.x + dx, cur.y)) { cur.x += dx; draw(); }
+  }
+  function softDrop() {
+    if (!cur) return;
+    if (!collide(cur.m, cur.x, cur.y + 1)) { cur.y++; draw(); return true; }
+    lock(); return false;
+  }
+  function hardDrop() {
+    if (!cur) return;
+    while (!collide(cur.m, cur.x, cur.y + 1)) cur.y++;
+    lock();
+  }
+  function lock() {
+    cur.m.forEach(function (row, r) {
+      row.forEach(function (v, c) {
+        if (v) {
+          var gy = cur.y + r, gx = cur.x + c;
+          if (gy >= 0) grid[gy][gx] = cur.color;
+        }
+      });
+    });
+    var cleared = 0;
+    grid = grid.filter(function (row) {
+      var full = row.every(function (v) { return v; });
+      if (full) cleared++;
+      return !full;
+    });
+    while (grid.length < ROWS) grid.unshift(new Array(COLS).fill(null));
+    if (cleared > 0) {
+      lines += cleared;
+      score += SCORES[cleared] * level;
+      var nl = Math.floor(lines / 10) + 1;
+      if (nl !== level) {
+        level = nl;
+        clearInterval(timer);
+        timer = setInterval(tick, speedFor(level));
+      }
+      scoreEl.textContent = score;
+      linesEl.textContent = lines + ' / ' + level;
+      if (score > best) {
+        best = score; bestEl.textContent = best;
+        try { localStorage.setItem('zdalao-tetris-best', String(best)); } catch (e) {}
+      }
+    }
+    cur = spawn(next); next = drawBag();
+    if (collide(cur.m, cur.x, cur.y)) { gameOver(); return; }
+    draw();
+  }
+  function speedFor(lv) { return Math.max(80, 700 - (lv - 1) * 60); }
+  function tick() { if (!paused) softDrop(); }
+
+  function drawCell(g, x, y, color) {
+    g.fillStyle = color;
+    g.fillRect(x * CELL + 1, y * CELL + 1, CELL - 2, CELL - 2);
+    g.fillStyle = 'rgba(255,255,255,.18)';
+    g.fillRect(x * CELL + 1, y * CELL + 1, CELL - 2, 5);
+  }
+  function draw() {
+    ctx.clearRect(0, 0, 300, 600);
+    ctx.fillStyle = '#161b22'; ctx.fillRect(0, 0, 300, 600);
+    ctx.strokeStyle = '#1f242c'; ctx.lineWidth = 1;
+    for (var i = 1; i < COLS; i++) { ctx.beginPath(); ctx.moveTo(i * CELL, 0); ctx.lineTo(i * CELL, 600); ctx.stroke(); }
+    for (var j = 1; j < ROWS; j++) { ctx.beginPath(); ctx.moveTo(0, j * CELL); ctx.lineTo(300, j * CELL); ctx.stroke(); }
+    grid.forEach(function (row, y) {
+      row.forEach(function (v, x) { if (v) drawCell(ctx, x, y, v); });
+    });
+    if (cur) {
+      cur.m.forEach(function (row, r) {
+        row.forEach(function (v, c) {
+          if (v && cur.y + r >= 0) drawCell(ctx, cur.x + c, cur.y + r, cur.color);
+        });
+      });
+    }
+    // next preview
+    nctx.clearRect(0, 0, 84, 84);
+    nctx.fillStyle = '#0d1117'; nctx.fillRect(0, 0, 84, 84);
+    if (next) {
+      var s = SHAPES[next], m = s.m, n = m.length, cs = 18;
+      var ox = (84 - m[0].length * cs) / 2, oy = (84 - n * cs) / 2;
+      m.forEach(function (row, r) {
+        row.forEach(function (v, c) {
+          if (!v) return;
+          nctx.fillStyle = s.c;
+          nctx.fillRect(ox + c * cs + 1, oy + r * cs + 1, cs - 2, cs - 2);
+        });
+      });
+    }
+  }
+
+  function reset() {
+    grid = emptyGrid(); bag = [];
+    next = drawBag(); cur = spawn(drawBag());
+    score = 0; lines = 0; level = 1; speed = speedFor(1);
+    scoreEl.textContent = '0';
+    linesEl.textContent = '0 / 1';
+  }
+  function start() {
+    reset();
+    running = true; paused = false;
+    pauseBtn.textContent = '暂停';
+    overlay.classList.add('hidden');
+    clearInterval(timer);
+    timer = setInterval(tick, speed);
+    draw();
+  }
+  function gameOver() {
+    running = false;
+    clearInterval(timer);
+    ovTitle.textContent = '游戏结束';
+    ovText.innerHTML = '得分 ' + score + '，消了 ' + lines + ' 行，最高 ' + best + '。<br>再来一局？';
+    startBtn.textContent = '再来一局';
+    overlay.classList.remove('hidden');
+  }
+  function togglePause() {
+    if (!running) return;
+    paused = !paused;
+    pauseBtn.textContent = paused ? '继续' : '暂停';
+    if (paused) { clearInterval(timer); } else { timer = setInterval(tick, speedFor(level)); }
+  }
+
+  startBtn.addEventListener('click', start);
+  restartBtn.addEventListener('click', start);
+  pauseBtn.addEventListener('click', togglePause);
+
+  document.addEventListener('keydown', function (e) {
+    var k = e.key.toLowerCase();
+    if (k === 'p') { togglePause(); return; }
+    if (k === ' ' ) { e.preventDefault(); if (!running) start(); else hardDrop(); return; }
+    if (k === 'enter' && !running) { start(); return; }
+    if (!running || paused) return;
+    var map = { arrowleft: 'left', a: 'left', arrowright: 'right', d: 'right',
+                arrowdown: 'down', s: 'down', arrowup: 'rotate', x: 'rotate' };
+    var act = map[k];
+    if (!act) return;
+    e.preventDefault();
+    if (act === 'left') move(-1);
+    else if (act === 'right') move(1);
+    else if (act === 'down') softDrop();
+    else if (act === 'rotate') doRotate();
+  });
+
+  document.querySelectorAll('.pad button[data-act]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var act = b.getAttribute('data-act');
+      if (act === 'down' && !running) { start(); return; }
+      if (!running) start();
+      if (paused) return;
+      if (act === 'left') move(-1);
+      else if (act === 'right') move(1);
+      else if (act === 'down') softDrop();
+      else if (act === 'rotate') doRotate();
+      else if (act === 'drop') hardDrop();
+    });
+  });
+
+  // swipe on board: horizontal = move, down = soft drop, tap = rotate
+  var tx = 0, ty = 0, t0 = 0;
+  board.addEventListener('touchstart', function (e) {
+    var t = e.changedTouches[0]; tx = t.clientX; ty = t.clientY; t0 = Date.now();
+    e.preventDefault();
+  }, { passive: false });
+  board.addEventListener('touchend', function (e) {
+    var t = e.changedTouches[0];
+    var dx = t.clientX - tx, dy = t.clientY - ty;
+    if (Math.abs(dx) < 14 && Math.abs(dy) < 14) {
+      if (Date.now() - t0 < 300) { if (!running) start(); else if (!paused) doRotate(); }
+    } else if (Math.abs(dx) > Math.abs(dy)) {
+      if (!running) start(); else move(dx > 0 ? 1 : -1);
+    } else if (dy > 0) {
+      if (!running) start(); else softDrop();
+    }
+    e.preventDefault();
+  }, { passive: false });
+
+  var clockEl = document.getElementById('clock');
+  function tickClock() {
+    clockEl.textContent = '现在是 ' + new Date().toLocaleString('zh-CN', { hour12: false });
+  }
+  tickClock(); setInterval(tickClock, 1000);
+
+  reset(); draw();
+})();
+</script>
+</body>
+</html>
